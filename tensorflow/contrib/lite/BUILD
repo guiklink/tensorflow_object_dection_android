@@ -273,3 +273,5 @@ cc_test(
 #        ],
 #    }),
 #)
+
+exports_files(["toco"])

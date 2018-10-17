@@ -62,9 +62,12 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
       "file:///android_asset/multibox_location_priors.txt";
 
   private static final int TF_OD_API_INPUT_SIZE = 300;
-  private static final String TF_OD_API_MODEL_FILE =
-      "file:///android_asset/ssd_mobilenet_v1_android_export.pb";
-  private static final String TF_OD_API_LABELS_FILE = "file:///android_asset/coco_labels_list.txt";
+  private static final String TF_OD_API_MODEL_FILE = "file:///android_asset/frozen_inference_graph.pb";
+  //private static final String TF_OD_API_MODEL_FILE =
+  //          "file:///android_asset/ssd_mobilenet_v1_android_export.pb";
+
+  //private static final String TF_OD_API_LABELS_FILE = "file:///android_asset/coco_labels_list.txt";
+  private static final String TF_OD_API_LABELS_FILE = "file:///android_asset/letter_labels.txt";
 
   // Configuration values for tiny-yolo-voc. Note that the graph is not included with TensorFlow and
   // must be manually placed in the assets/ directory by the user.
@@ -152,6 +155,8 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
               MB_OUTPUT_SCORES_NAME);
       cropSize = MB_INPUT_SIZE;
     } else {
+
+      // LOAD NN Detector here
       try {
         detector = TensorFlowObjectDetectionAPIModel.create(
             getAssets(), TF_OD_API_MODEL_FILE, TF_OD_API_LABELS_FILE, TF_OD_API_INPUT_SIZE);
@@ -185,6 +190,8 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
     cropToFrameTransform = new Matrix();
     frameToCropTransform.invert(cropToFrameTransform);
 
+    // Tracking function is used to cheat and use less model calls and track the detections
+    // the drawing is also performed here
     trackingOverlay = (OverlayView) findViewById(R.id.tracking_overlay);
     trackingOverlay.addCallback(
         new DrawCallback() {
@@ -197,6 +204,7 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
           }
         });
 
+    // Dont really get how this helps
     addCallback(
         new DrawCallback() {
           @Override
@@ -265,6 +273,8 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
     computingDetection = true;
     LOGGER.i("Preparing image " + currTimestamp + " for detection in bg thread.");
 
+
+    // THIS IS WHERE WE WILL PUT OUR IMAGES: Retrieve image from camera: getRgbBytes()
     rgbFrameBitmap.setPixels(getRgbBytes(), 0, previewWidth, 0, 0, previewWidth, previewHeight);
 
     if (luminanceCopy == null) {
@@ -273,12 +283,19 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
     System.arraycopy(originalLuminance, 0, luminanceCopy, 0, originalLuminance.length);
     readyForNextImage();
 
+    // Create a canvas to hold the square-ish image the MobileNet Demands
     final Canvas canvas = new Canvas(croppedBitmap);
+
+    // frameToCropTransform is a SO2 transformation matrix that transform the picture to the device alignment
+    // Transform the image to the canvas
     canvas.drawBitmap(rgbFrameBitmap, frameToCropTransform, null);
-    // For examining the actual TF input.
+
+    // (for debugging) For examining the actual TF input.
     if (SAVE_PREVIEW_BITMAP) {
       ImageUtils.saveBitmap(croppedBitmap);
     }
+
+    // THE PREDICTIONS ARE HANDLED HERE
 
     runInBackground(
         new Runnable() {
@@ -286,6 +303,8 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
           public void run() {
             LOGGER.i("Running detection on image " + currTimestamp);
             final long startTime = SystemClock.uptimeMillis();
+
+            // Call NN model and store outputs
             final List<Classifier.Recognition> results = detector.recognizeImage(croppedBitmap);
             lastProcessingTimeMs = SystemClock.uptimeMillis() - startTime;
 
@@ -296,6 +315,7 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
             paint.setStyle(Style.STROKE);
             paint.setStrokeWidth(2.0f);
 
+            // These are how to set these variables accordingly to different NN designs
             float minimumConfidence = MINIMUM_CONFIDENCE_TF_OD_API;
             switch (MODE) {
               case TF_OD_API:
@@ -314,18 +334,25 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
 
             for (final Classifier.Recognition result : results) {
               final RectF location = result.getLocation();
+              // Test if pass our detection threshold
               if (location != null && result.getConfidence() >= minimumConfidence) {
+                // Draw prediction
                 canvas.drawRect(location, paint);
 
+                // Translate the detection to a position back in the original image (remember that we needed to transform the image to be usable with MobileNet)
                 cropToFrameTransform.mapRect(location);
                 result.setLocation(location);
+
+                // Store recognitions in a list
                 mappedRecognitions.add(result);
               }
             }
 
+            // Cheats using tracking to minimize model runs (won't need this for our project)
             tracker.trackResults(mappedRecognitions, luminanceCopy, currTimestamp);
             trackingOverlay.postInvalidate();
 
+            // requestRender(): from CameraActivity seems to be the function that draw the final result on the screen ??
             requestRender();
             computingDetection = false;
           }
